@@ -4,10 +4,10 @@ import { PhotoAlbum } from './photo_album';
 
 @Table
 export class Album extends Model {
-  @Unique 
+  @Unique
   @Column
   name!: string;
 
   @BelongsToMany(() => Photo, () => PhotoAlbum)
-  photos!: Array<Photo & { PhotoAlbum: PhotoAlbum }>;
+  photos: Array<Photo & { PhotoAlbum: PhotoAlbum }> = [];
 }
