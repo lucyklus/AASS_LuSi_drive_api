@@ -69,9 +69,10 @@ app.put('/photo/:id', async (req: Request, res: Response) => {
     },
   });
 
-  photoFound.name = name;
+  photoFound.setAttributes({ name });
   await photoFound.$set('albums', dbAlbums);
   await photoFound.save();
+  console.log('PHOTO: ', photoFound);
   res.send(photoFound);
 });
 
