@@ -8,6 +8,10 @@ export interface IUpdatePhotoDTO {
   albums: number[];
 }
 
+export interface IUpdateAlbumDTO {
+  name: string;
+}
+
 export interface ICreateAlbumDTO {
   name: string;
 }

@@ -6,7 +6,7 @@ import { Sequelize } from 'sequelize-typescript';
 import { Photo } from './models/photo';
 import { Album } from './models/album';
 import { PhotoAlbum } from './models/photo_album';
-import { ICreateAlbumDTO, ICreatePhotoDTO, IUpdatePhotoDTO } from './interfaces';
+import { ICreateAlbumDTO, ICreatePhotoDTO, IUpdateAlbumDTO, IUpdatePhotoDTO } from './interfaces';
 import { Op } from 'sequelize';
 
 dotenv.config();
@@ -61,8 +61,6 @@ app.put('/photo/:id', async (req: Request, res: Response) => {
     return res.status(404).send({ error: 'Photo not found' });
   }
 
-  console.log('ALBUMS: ', albums);
-
   const dbAlbums = await Album.findAll({
     where: {
       id: albums,
@@ -72,7 +70,6 @@ app.put('/photo/:id', async (req: Request, res: Response) => {
   photoFound.setAttributes({ name });
   await photoFound.$set('albums', dbAlbums);
   await photoFound.save();
-  console.log('PHOTO: ', photoFound);
   res.send(photoFound);
 });
 
@@ -81,10 +78,42 @@ app.post('/album', async (req: Request, res: Response) => {
   const album = await Album.create({ name });
   res.send(album);
 });
+app.put('/album/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { name } = req.body as IUpdateAlbumDTO;
+  const albumFound = await Album.findOne({ where: { id } });
+  if (!albumFound) {
+    return res.status(404).send({ error: 'Album not found' });
+  }
+
+  albumFound.setAttributes({ name });
+  await albumFound.save();
+  res.send(albumFound);
+});
 
 app.get('/albums', async (req: Request, res: Response) => {
   const albums = await Album.findAll();
   res.send(albums);
+});
+
+app.delete('/photo/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const photoFound = await Photo.findOne({ where: { id } });
+  if (!photoFound) {
+    return res.status(405).send({ error: 'Photo not found' });
+  }
+  await photoFound.destroy();
+  res.send(`Photo with id: ${id} deleted`);
+});
+
+app.delete('/album/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const albumFound = await Album.findOne({ where: { id } });
+  if (!albumFound) {
+    return res.status(405).send({ error: 'Album not found' });
+  }
+  await albumFound.destroy();
+  res.send(`Album with id: ${id} deleted`);
 });
 
 const mockup = async () => {
