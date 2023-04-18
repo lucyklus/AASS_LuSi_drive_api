@@ -2,17 +2,140 @@ import express, { Express, Request, Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import { Sequelize } from 'sequelize-typescript';
+import { dynamicImport } from 'tsimportlib';
+
+import { type ClientConfig } from 'camunda-external-task-client-js';
 
 import { Photo } from './models/photo';
 import { Album } from './models/album';
 import { PhotoAlbum } from './models/photo_album';
-import { ICreateAlbumDTO, ICreatePhotoDTO, IUpdateAlbumDTO, IUpdatePhotoDTO } from './interfaces';
-import { Op } from 'sequelize';
+import type { ICreateAlbumDTO, ICreatePhotoDTO, IUpdateAlbumDTO, IUpdatePhotoDTO } from './interfaces';
 
 dotenv.config();
+(async () => {
+  const { Client, logger, Variables } = (await dynamicImport(
+    'camunda-external-task-client-js',
+    module,
+  )) as typeof import('camunda-external-task-client-js');
+
+  const config: ClientConfig = {
+    baseUrl: process.env.CAMUNDA_REST ?? 'http://localhost:8080/engine-rest',
+    use: logger,
+    asyncResponseTimeout: 10000,
+  };
+
+  const client = new Client(config);
+  const vars = new Variables();
+
+  client.subscribe('add-new-photo', async function ({ task, taskService }) {
+    const name = task.variables.get('photoName');
+    const cloudinaryLink = task.variables.get('cloudinaryLink');
+
+    if (!name || !cloudinaryLink) {
+      console.log('ADD_NEW_PHOTO > Invalid data provided');
+      return await taskService.handleFailure(task, {
+        errorMessage: 'Invalid data provided',
+        errorDetails: 'Invalid data provided',
+        retries: 0,
+      });
+    }
+
+    const photo = await Photo.create({ name, cloudinaryLink });
+    console.log('Photo created');
+
+    vars.set('photoId', photo.id);
+    await taskService.complete(task, vars);
+  });
+
+  client.subscribe('edit-photo-name', async function ({ task, taskService }) {
+    const name = task.variables.get('newPhotoName');
+    if (!name) {
+      console.log('EDIT_PHOTO_NAME > Invalid data provided');
+      return await taskService.handleFailure(task, {
+        errorMessage: 'Invalid data provided',
+        errorDetails: 'Invalid data provided',
+        retries: 0,
+      });
+    }
+
+    const photoFound = await Photo.findOne({ where: { id: vars.get('photoId') } });
+    if (!photoFound) {
+      console.log('EDIT_PHTO > Photo doesnt exist');
+      return await taskService.handleFailure(task, {
+        errorMessage: 'Invalid data provided',
+        errorDetails: 'Invalid data provided',
+        retries: 0,
+      });
+    }
+    photoFound.setAttributes({ name });
+    console.log('Photo name edited');
+    await photoFound.save();
+    await taskService.complete(task);
+  });
+
+  client.subscribe('create-album', async function ({ task, taskService }) {
+    const name = 'New Album';
+    const album = await Album.create({ name });
+    console.log('Album created');
+    vars.set('albumId', album.id);
+    console.log('Album created');
+    await taskService.complete(task);
+  });
+
+  client.subscribe('edit-album', async function ({ task, taskService }) {
+    const id = vars.get('albumId');
+    const name = task.variables.get('newAlbumName');
+    if (!id || !name) {
+      console.log('EDIT_ALBUM > Invalid data provided');
+      return await taskService.handleFailure(task, {
+        errorMessage: 'Invalid data provided',
+        errorDetails: 'Invalid data provided',
+        retries: 0,
+      });
+    }
+    const albumFound = await Album.findOne({ where: { id } });
+    if (!albumFound) {
+      console.log('EDIT_ALBUM > Album doesnt exist');
+      return await taskService.handleFailure(task, {
+        errorMessage: 'Album not found',
+        errorDetails: 'Album not found',
+        retries: 0,
+      });
+    }
+
+    albumFound.setAttributes({ name });
+    await albumFound.save();
+    console.log('Album edited');
+    await taskService.complete(task);
+  });
+
+  client.subscribe('add-photo-to-album', async function ({ task, taskService }) {
+    const id = vars.get('photoId');
+    const albums = [vars.get('albumId')] as number[];
+    const photoFound = await Photo.findOne({ where: { id } });
+    if (!photoFound) {
+      console.log('ADD_PHOTO_TO_ALBUM > Photo doesnt exist');
+      return await taskService.handleFailure(task, {
+        errorMessage: 'Photo not found',
+        errorDetails: 'Photo not found',
+        retries: 0,
+      });
+    }
+
+    const dbAlbums = await Album.findAll({
+      where: {
+        id: albums,
+      },
+    });
+
+    await photoFound.$set('albums', dbAlbums);
+    await photoFound.save();
+    await taskService.complete(task);
+  });
+})();
 
 const app: Express = express();
-const port = process.env.PORT;
+const port = process.env.PORT ?? '3000';
 
 app.use(express.json());
 app.use(
