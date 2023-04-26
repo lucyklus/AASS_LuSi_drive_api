@@ -1,6 +1,8 @@
 import express, { Express, Request, Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
+import ws from 'ws';
+import expressWs from 'express-ws';
 import { Sequelize } from 'sequelize-typescript';
 import { dynamicImport } from 'tsimportlib';
 
@@ -12,130 +14,11 @@ import { PhotoAlbum } from './models/photo_album';
 import type { ICreateAlbumDTO, ICreatePhotoDTO, IUpdateAlbumDTO, IUpdatePhotoDTO } from './interfaces';
 
 dotenv.config();
-(async () => {
-  const { Client, logger, Variables } = (await dynamicImport(
-    'camunda-external-task-client-js',
-    module,
-  )) as typeof import('camunda-external-task-client-js');
 
-  const config: ClientConfig = {
-    baseUrl: process.env.CAMUNDA_REST ?? 'http://localhost:8080/engine-rest',
-    use: logger,
-    asyncResponseTimeout: 10000,
-  };
-
-  const client = new Client(config);
-  const vars = new Variables();
-
-  client.subscribe('add-new-photo', async function ({ task, taskService }) {
-    const name = task.variables.get('photoName');
-    const cloudinaryLink = task.variables.get('cloudinaryLink');
-
-    if (!name || !cloudinaryLink) {
-      console.log('ADD_NEW_PHOTO > Invalid data provided');
-      return await taskService.handleFailure(task, {
-        errorMessage: 'Invalid data provided',
-        errorDetails: 'Invalid data provided',
-        retries: 0,
-      });
-    }
-
-    const photo = await Photo.create({ name, cloudinaryLink });
-    console.log('Photo created');
-
-    vars.set('photoId', photo.id);
-    await taskService.complete(task, vars);
-  });
-
-  client.subscribe('edit-photo-name', async function ({ task, taskService }) {
-    const name = task.variables.get('newPhotoName');
-    if (!name) {
-      console.log('EDIT_PHOTO_NAME > Invalid data provided');
-      return await taskService.handleFailure(task, {
-        errorMessage: 'Invalid data provided',
-        errorDetails: 'Invalid data provided',
-        retries: 0,
-      });
-    }
-
-    const photoFound = await Photo.findOne({ where: { id: vars.get('photoId') } });
-    if (!photoFound) {
-      console.log('EDIT_PHTO > Photo doesnt exist');
-      return await taskService.handleFailure(task, {
-        errorMessage: 'Invalid data provided',
-        errorDetails: 'Invalid data provided',
-        retries: 0,
-      });
-    }
-    photoFound.setAttributes({ name });
-    console.log('Photo name edited');
-    await photoFound.save();
-    await taskService.complete(task);
-  });
-
-  client.subscribe('create-album', async function ({ task, taskService }) {
-    const name = 'New Album';
-    const album = await Album.create({ name });
-    console.log('Album created');
-    vars.set('albumId', album.id);
-    console.log('Album created');
-    await taskService.complete(task);
-  });
-
-  client.subscribe('edit-album', async function ({ task, taskService }) {
-    const id = vars.get('albumId');
-    const name = task.variables.get('newAlbumName');
-    if (!id || !name) {
-      console.log('EDIT_ALBUM > Invalid data provided');
-      return await taskService.handleFailure(task, {
-        errorMessage: 'Invalid data provided',
-        errorDetails: 'Invalid data provided',
-        retries: 0,
-      });
-    }
-    const albumFound = await Album.findOne({ where: { id } });
-    if (!albumFound) {
-      console.log('EDIT_ALBUM > Album doesnt exist');
-      return await taskService.handleFailure(task, {
-        errorMessage: 'Album not found',
-        errorDetails: 'Album not found',
-        retries: 0,
-      });
-    }
-
-    albumFound.setAttributes({ name });
-    await albumFound.save();
-    console.log('Album edited');
-    await taskService.complete(task);
-  });
-
-  client.subscribe('add-photo-to-album', async function ({ task, taskService }) {
-    const id = vars.get('photoId');
-    const albums = [vars.get('albumId')] as number[];
-    const photoFound = await Photo.findOne({ where: { id } });
-    if (!photoFound) {
-      console.log('ADD_PHOTO_TO_ALBUM > Photo doesnt exist');
-      return await taskService.handleFailure(task, {
-        errorMessage: 'Photo not found',
-        errorDetails: 'Photo not found',
-        retries: 0,
-      });
-    }
-
-    const dbAlbums = await Album.findAll({
-      where: {
-        id: albums,
-      },
-    });
-
-    await photoFound.$set('albums', dbAlbums);
-    await photoFound.save();
-    await taskService.complete(task);
-  });
-})();
-
-const app: Express = express();
+const { app } = expressWs(express());
 const port = process.env.PORT ?? '3000';
+
+expressWs(app);
 
 app.use(express.json());
 app.use(
@@ -245,8 +128,6 @@ const mockup = async () => {
 
     const album1 = await Album.create({ name: 'My Album 1' });
     const album2 = await Album.create({ name: 'My Album 2' });
-    const album3 = await Album.create({ name: 'My Album 3' });
-    const album4 = await Album.create({ name: 'My Album 4' });
     const photo1 = await Photo.create({
       name: 'My Photo 1',
       cloudinaryLink: 'https://picsum.photos/200/300',
@@ -255,19 +136,115 @@ const mockup = async () => {
       name: 'My Photo 2',
       cloudinaryLink: 'https://picsum.photos/200/300',
     });
-    const photo3 = await Photo.create({
-      name: 'My Photo 3',
-      cloudinaryLink: 'https://picsum.photos/200/300',
-    });
     await photo1.$add('albums', album1);
-    await photo2.$add('albums', album1);
-    await photo3.$add('albums', album1);
+    await photo2.$add('albums', album2);
   } catch (err) {
     console.log('Mockup failed');
   }
 };
 
 app.listen(port, async () => {
-  await mockup();
+  await sequelize.sync();
+  // await mockup();
   console.log(`⚡️[server]: Server is running at http://localhost:${port}`);
+});
+
+interface WsMessage {
+  type: 'server' | 'upload' | 'notification' | 'photos';
+  data?: any;
+}
+
+app.ws('/', async (ws, req) => {
+  console.log('Ws started');
+  console.log('Preparing camunda client');
+  const { Client, logger, Variables } = (await dynamicImport(
+    'camunda-external-task-client-js',
+    module,
+  )) as typeof import('camunda-external-task-client-js');
+
+  const config: ClientConfig = {
+    baseUrl: process.env.CAMUNDA_REST ?? 'http://localhost:8080/engine-rest',
+    use: logger,
+    asyncResponseTimeout: 10000,
+  };
+
+  const client = new Client(config);
+  const vars = new Variables();
+
+  client.subscribe('approve-upload', async function ({ task, taskService }) {
+    console.log('approve-upload');
+    try {
+      const message: WsMessage = {
+        type: 'upload',
+        data: {
+          message: 'Are you sure you want to upload this photo?',
+        },
+      };
+      ws.send(JSON.stringify(message));
+      interface UploadResponse {
+        upload: 'yes' | 'no';
+        url?: string;
+      }
+      ws.on('message', async (msg: string) => {
+        const response = JSON.parse(msg) as UploadResponse;
+        if (response.upload === 'yes') {
+          vars.set('save', 'yes');
+          vars.set('cloudinaryLink', response.url);
+        } else if (response.upload === 'no') {
+          vars.set('save', 'no');
+        }
+        await taskService.complete(task, vars);
+      });
+    } catch (err) {
+      console.log(err);
+    }
+  });
+
+  client.subscribe('save-notification', async function ({ task, taskService }) {
+    console.log('save-notification');
+    const message: WsMessage = {
+      type: 'notification',
+      data: {
+        message: 'Photo saved successfully',
+      },
+    };
+    ws.send(JSON.stringify(message));
+    await taskService.complete(task);
+  });
+
+  client.subscribe('return-photos', async function ({ task, taskService }) {
+    console.log('return-photos');
+    const photos = await Photo.findAll({ include: [Album] });
+    vars.set('photos', photos);
+    const message: WsMessage = {
+      type: 'photos',
+      data: {
+        photos,
+      },
+    };
+    ws.send(JSON.stringify(message));
+    await taskService.complete(task, vars);
+  });
+
+  client.subscribe('save-photo', async function ({ task, taskService }) {
+    console.log('save-photo');
+    try {
+      const name = task.variables.get('name');
+      const cloudinaryLink = task.variables.get('cloudinaryLink');
+      const photo = await Photo.create({ name, cloudinaryLink });
+      vars.set('photoId', photo.id);
+      await taskService.complete(task, vars);
+    } catch (err) {
+      console.log(err);
+    }
+  });
+
+  const message: WsMessage = {
+    type: 'server',
+    data: {
+      ready: true,
+    },
+  };
+
+  ws.send(JSON.stringify(message));
 });

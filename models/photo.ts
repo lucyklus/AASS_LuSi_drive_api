@@ -4,7 +4,6 @@ import { PhotoAlbum } from './photo_album';
 
 @Table
 export class Photo extends Model {
-  @Unique
   @Column
   name!: string;
 
