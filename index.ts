@@ -1,24 +1,18 @@
 import express, { Express, Request, Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import ws from 'ws';
-import expressWs from 'express-ws';
 import { Sequelize } from 'sequelize-typescript';
-import { dynamicImport } from 'tsimportlib';
-
-import { type ClientConfig } from 'camunda-external-task-client-js';
 
 import { Photo } from './models/photo';
 import { Album } from './models/album';
 import { PhotoAlbum } from './models/photo_album';
-import type { ICreateAlbumDTO, ICreatePhotoDTO, IUpdateAlbumDTO, IUpdatePhotoDTO } from './interfaces';
+import { ICreateAlbumDTO, ICreatePhotoDTO, IUpdateAlbumDTO, IUpdatePhotoDTO } from './interfaces';
+import { Op } from 'sequelize';
 
 dotenv.config();
 
-const { app } = expressWs(express());
-const port = process.env.PORT ?? '3000';
-
-expressWs(app);
+const app: Express = express();
+const port = process.env.PORT;
 
 app.use(express.json());
 app.use(
@@ -128,6 +122,8 @@ const mockup = async () => {
 
     const album1 = await Album.create({ name: 'My Album 1' });
     const album2 = await Album.create({ name: 'My Album 2' });
+    const album3 = await Album.create({ name: 'My Album 3' });
+    const album4 = await Album.create({ name: 'My Album 4' });
     const photo1 = await Photo.create({
       name: 'My Photo 1',
       cloudinaryLink: 'https://picsum.photos/200/300',
@@ -136,115 +132,19 @@ const mockup = async () => {
       name: 'My Photo 2',
       cloudinaryLink: 'https://picsum.photos/200/300',
     });
+    const photo3 = await Photo.create({
+      name: 'My Photo 3',
+      cloudinaryLink: 'https://picsum.photos/200/300',
+    });
     await photo1.$add('albums', album1);
-    await photo2.$add('albums', album2);
+    await photo2.$add('albums', album1);
+    await photo3.$add('albums', album1);
   } catch (err) {
     console.log('Mockup failed');
   }
 };
 
 app.listen(port, async () => {
-  await sequelize.sync();
-  // await mockup();
+  await mockup();
   console.log(`⚡️[server]: Server is running at http://localhost:${port}`);
-});
-
-interface WsMessage {
-  type: 'server' | 'upload' | 'notification' | 'photos';
-  data?: any;
-}
-
-app.ws('/', async (ws, req) => {
-  console.log('Ws started');
-  console.log('Preparing camunda client');
-  const { Client, logger, Variables } = (await dynamicImport(
-    'camunda-external-task-client-js',
-    module,
-  )) as typeof import('camunda-external-task-client-js');
-
-  const config: ClientConfig = {
-    baseUrl: process.env.CAMUNDA_REST ?? 'http://localhost:8080/engine-rest',
-    use: logger,
-    asyncResponseTimeout: 10000,
-  };
-
-  const client = new Client(config);
-  const vars = new Variables();
-
-  client.subscribe('approve-upload', async function ({ task, taskService }) {
-    console.log('approve-upload');
-    try {
-      const message: WsMessage = {
-        type: 'upload',
-        data: {
-          message: 'Are you sure you want to upload this photo?',
-        },
-      };
-      ws.send(JSON.stringify(message));
-      interface UploadResponse {
-        upload: 'yes' | 'no';
-        url?: string;
-      }
-      ws.on('message', async (msg: string) => {
-        const response = JSON.parse(msg) as UploadResponse;
-        if (response.upload === 'yes') {
-          vars.set('save', 'yes');
-          vars.set('cloudinaryLink', response.url);
-        } else if (response.upload === 'no') {
-          vars.set('save', 'no');
-        }
-        await taskService.complete(task, vars);
-      });
-    } catch (err) {
-      console.log(err);
-    }
-  });
-
-  client.subscribe('save-notification', async function ({ task, taskService }) {
-    console.log('save-notification');
-    const message: WsMessage = {
-      type: 'notification',
-      data: {
-        message: 'Photo saved successfully',
-      },
-    };
-    ws.send(JSON.stringify(message));
-    await taskService.complete(task);
-  });
-
-  client.subscribe('return-photos', async function ({ task, taskService }) {
-    console.log('return-photos');
-    const photos = await Photo.findAll({ include: [Album] });
-    vars.set('photos', photos);
-    const message: WsMessage = {
-      type: 'photos',
-      data: {
-        photos,
-      },
-    };
-    ws.send(JSON.stringify(message));
-    await taskService.complete(task, vars);
-  });
-
-  client.subscribe('save-photo', async function ({ task, taskService }) {
-    console.log('save-photo');
-    try {
-      const name = task.variables.get('name');
-      const cloudinaryLink = task.variables.get('cloudinaryLink');
-      const photo = await Photo.create({ name, cloudinaryLink });
-      vars.set('photoId', photo.id);
-      await taskService.complete(task, vars);
-    } catch (err) {
-      console.log(err);
-    }
-  });
-
-  const message: WsMessage = {
-    type: 'server',
-    data: {
-      ready: true,
-    },
-  };
-
-  ws.send(JSON.stringify(message));
 });
