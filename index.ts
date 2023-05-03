@@ -1,4 +1,4 @@
-import express, { Express, Request, Response } from 'express';
+import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import { Sequelize } from 'sequelize-typescript';
@@ -41,8 +41,6 @@ sequelize.addModels([Photo, Album, PhotoAlbum]);
 type OperationType = 'photos' | 'albums';
 type OperationKind = 'create' | 'update' | 'delete' | 'read';
 interface IOperation<Type extends OperationType, Kind extends OperationKind> {
-  type: Type;
-  kind: Kind;
   data: Type extends 'photos'
     ? Kind extends 'create'
       ? ICreatePhotoDTO
@@ -64,12 +62,10 @@ app.post('/photo', async (req: Request, res: Response) => {
   const { name, cloudinaryLink } = req.body as ICreatePhotoDTO;
   await producer.connect();
   const operation: IOperation<'photos', 'create'> = {
-    type: 'photos',
-    kind: 'create',
     data: { name, cloudinaryLink },
   };
   await producer.send({
-    topic: 'operations',
+    topic: 'photos.create',
     messages: [{ value: JSON.stringify(operation) }],
   });
   await producer.disconnect();
@@ -79,12 +75,10 @@ app.post('/photo', async (req: Request, res: Response) => {
 app.get('/photos', async (req: Request, res: Response) => {
   await producer.connect();
   const operation: IOperation<'photos', 'read'> = {
-    type: 'photos',
-    kind: 'read',
     data: {},
   };
   await producer.send({
-    topic: 'operations',
+    topic: 'photos.read',
     messages: [{ value: JSON.stringify(operation) }],
   });
   await producer.disconnect();
@@ -95,12 +89,10 @@ app.get('/:albumId/photos', async (req: Request, res: Response) => {
   const { albumId } = req.params;
   await producer.connect();
   const operation: IOperation<'photos', 'read'> = {
-    type: 'photos',
-    kind: 'read',
     data: { id: albumId },
   };
   await producer.send({
-    topic: 'operations',
+    topic: 'photos.read',
     messages: [{ value: JSON.stringify(operation) }],
   });
   await producer.disconnect();
@@ -112,12 +104,10 @@ app.put('/photo/:id', async (req: Request, res: Response) => {
   const { name, albums } = req.body as IUpdatePhotoDTO;
   await producer.connect();
   const operation: IOperation<'photos', 'update'> = {
-    type: 'photos',
-    kind: 'update',
     data: { id, name, albums },
   };
   await producer.send({
-    topic: 'operations',
+    topic: 'photos.update',
     messages: [{ value: JSON.stringify(operation) }],
   });
   await producer.disconnect();
@@ -128,12 +118,10 @@ app.post('/album', async (req: Request, res: Response) => {
   const { name } = req.body as ICreateAlbumDTO;
   await producer.connect();
   const operation: IOperation<'albums', 'create'> = {
-    type: 'albums',
-    kind: 'create',
     data: { name },
   };
   await producer.send({
-    topic: 'operations',
+    topic: 'albums.create',
     messages: [{ value: JSON.stringify(operation) }],
   });
   await producer.disconnect();
@@ -144,12 +132,10 @@ app.put('/album/:id', async (req: Request, res: Response) => {
   const { name } = req.body as IUpdateAlbumDTO;
   await producer.connect();
   const operation: IOperation<'albums', 'update'> = {
-    type: 'albums',
-    kind: 'update',
     data: { id, name },
   };
   await producer.send({
-    topic: 'operations',
+    topic: 'albums.update',
     messages: [{ value: JSON.stringify(operation) }],
   });
   await producer.disconnect();
@@ -159,12 +145,10 @@ app.put('/album/:id', async (req: Request, res: Response) => {
 app.get('/albums', async (req: Request, res: Response) => {
   await producer.connect();
   const operation: IOperation<'albums', 'read'> = {
-    type: 'albums',
-    kind: 'read',
     data: undefined,
   };
   await producer.send({
-    topic: 'operations',
+    topic: 'albums.read',
     messages: [{ value: JSON.stringify(operation) }],
   });
   await producer.disconnect();
@@ -175,12 +159,10 @@ app.delete('/photo/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
   await producer.connect();
   const operation: IOperation<'photos', 'delete'> = {
-    type: 'photos',
-    kind: 'delete',
     data: { id },
   };
   await producer.send({
-    topic: 'operations',
+    topic: 'photos.delete',
     messages: [{ value: JSON.stringify(operation) }],
   });
   await producer.disconnect();
@@ -191,12 +173,10 @@ app.delete('/album/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
   await producer.connect();
   const operation: IOperation<'albums', 'delete'> = {
-    type: 'albums',
-    kind: 'delete',
     data: { id },
   };
   await producer.send({
-    topic: 'operations',
+    topic: 'albums.delete',
     messages: [{ value: JSON.stringify(operation) }],
   });
   await producer.disconnect();
@@ -238,98 +218,98 @@ app.listen(port, async () => {
   await mockup();
   console.log(`⚡️[server]: Database mocked up`);
   await consumer.connect();
-  await consumer.subscribe({ topic: 'operations', fromBeginning: true });
+  await consumer.subscribe({
+    topics: [
+      'albums.create',
+      'albums.read',
+      'albums.update',
+      'albums.delete',
+      'photos.create',
+      'photos.read',
+      'photos.update',
+      'photos.delete',
+    ],
+    fromBeginning: true,
+  });
   await consumer.run({
-    eachMessage: async ({ message }) => {
+    eachMessage: async ({ message, topic }) => {
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       const data = JSON.parse(message.value!.toString());
       console.log('Data: ', data);
       if (data) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const operation: { type: OperationType; kind: OperationKind } = data as any;
-        if (operation.type == 'photos') {
-          if (operation.kind == 'create') {
-            const { name, cloudinaryLink } = (operation as IOperation<'photos', 'create'>).data;
-            const photo = await Photo.create({ name, cloudinaryLink });
-            console.log('Photo created', photo.id);
-            return;
+        if (topic == 'photos.create') {
+          const { name, cloudinaryLink } = (data as IOperation<'photos', 'create'>).data;
+          const photo = await Photo.create({ name, cloudinaryLink });
+          console.log('Photo created', photo.id);
+          return;
+        } else if (topic == 'photos.update') {
+          const { id, name, albums } = (data as IOperation<'photos', 'update'>).data;
+          const photoFound = await Photo.findOne({ where: { id } });
+          if (!photoFound) {
+            return globalWs?.send(JSON.stringify({ error: 'Photo not found' }));
           }
-          if (operation.kind == 'update') {
-            const { id, name, albums } = (operation as IOperation<'photos', 'update'>).data;
-            const photoFound = await Photo.findOne({ where: { id } });
-            if (!photoFound) {
-              return globalWs?.send(JSON.stringify({ error: 'Photo not found' }));
-            }
-            const dbAlbums = await Album.findAll({
-              where: {
-                id: albums,
-              },
-            });
-            photoFound.setAttributes({ name });
-            await photoFound.$set('albums', dbAlbums);
-            await photoFound.save();
-            console.log('Photo updated', photoFound.id);
-            return;
+          const dbAlbums = await Album.findAll({
+            where: {
+              id: albums,
+            },
+          });
+          photoFound.setAttributes({ name });
+          await photoFound.$set('albums', dbAlbums);
+          await photoFound.save();
+          console.log('Photo updated', photoFound.id);
+          return;
+        } else if (topic == 'photos.delete') {
+          const { id } = (data as IOperation<'photos', 'delete'>).data;
+          const photoFound = await Photo.findOne({ where: { id } });
+          if (!photoFound) {
+            return globalWs?.send(JSON.stringify({ error: 'Photo not found' }));
           }
-          if (operation.kind == 'delete') {
-            const { id } = (operation as IOperation<'photos', 'delete'>).data;
-            const photoFound = await Photo.findOne({ where: { id } });
-            if (!photoFound) {
-              return globalWs?.send(JSON.stringify({ error: 'Photo not found' }));
-            }
-            await photoFound.destroy();
-            console.log('Photo deleted', photoFound.id);
-            return;
-          }
-          if (operation.kind == 'read') {
-            const { id } = (operation as IOperation<'photos', 'read'>).data;
-            let photos = [];
-            if (!id) {
-              photos = await Photo.findAll({ include: [Album] });
-            } else {
-              const album = await Album.findOne({ where: { id } });
-              if (!album) {
-                return globalWs?.send(JSON.stringify({ error: 'Album not found' }));
-              }
-              photos = await album.$get('photos', { include: [Album] });
-            }
-            console.log('Photos read', photos.length);
-            return globalWs?.send(JSON.stringify({ type: 'photos', data: photos }));
-          }
-        }
-        if (operation.type == 'albums') {
-          if (operation.kind == 'create') {
-            const { name } = (operation as IOperation<'albums', 'create'>).data;
-            const album = await Album.create({ name });
-            console.log('Album created', album.id);
-            return;
-          }
-          if (operation.kind == 'update') {
-            const { id, name } = (operation as IOperation<'albums', 'update'>).data;
-            const albumFound = await Album.findOne({ where: { id } });
-            if (!albumFound) {
+          await photoFound.destroy();
+          console.log('Photo deleted', photoFound.id);
+          return;
+        } else if (topic == 'photos.read') {
+          const { id } = (data as IOperation<'photos', 'read'>).data;
+          let photos = [];
+          if (!id) {
+            photos = await Photo.findAll({ include: [Album] });
+          } else {
+            const album = await Album.findOne({ where: { id } });
+            if (!album) {
               return globalWs?.send(JSON.stringify({ error: 'Album not found' }));
             }
-            albumFound.setAttributes({ name });
-            await albumFound.save();
-            console.log('Album updated', albumFound.id);
-            return;
+            photos = await album.$get('photos', { include: [Album] });
           }
-          if (operation.kind == 'delete') {
-            const { id } = (operation as IOperation<'albums', 'delete'>).data;
-            const albumFound = await Album.findOne({ where: { id } });
-            if (!albumFound) {
-              return globalWs?.send(JSON.stringify({ error: 'Album not found' }));
-            }
-            await albumFound.destroy();
-            console.log('Album deleted', albumFound.id);
-            return;
+          console.log('Photos read', photos.length);
+          return globalWs?.send(JSON.stringify({ type: 'photos', data: photos }));
+        } else if (topic == 'albums.create') {
+          const { name } = (data as IOperation<'albums', 'create'>).data;
+          const album = await Album.create({ name });
+          console.log('Album created', album.id);
+          return;
+        } else if (topic == 'albums.update') {
+          const { id, name } = (data as IOperation<'albums', 'update'>).data;
+          const albumFound = await Album.findOne({ where: { id } });
+          if (!albumFound) {
+            return globalWs?.send(JSON.stringify({ error: 'Album not found' }));
           }
-          if (operation.kind == 'read') {
-            const albums = await Album.findAll();
-            console.log('Albums read', albums.length);
-            return globalWs?.send(JSON.stringify({ type: 'albums', data: albums }));
+          albumFound.setAttributes({ name });
+          await albumFound.save();
+          console.log('Album updated', albumFound.id);
+          return;
+        } else if (topic == 'albums.delete') {
+          const { id } = (data as IOperation<'albums', 'delete'>).data;
+          const albumFound = await Album.findOne({ where: { id } });
+          if (!albumFound) {
+            return globalWs?.send(JSON.stringify({ error: 'Album not found' }));
           }
+          await albumFound.destroy();
+          console.log('Album deleted', albumFound.id);
+          return;
+        } else if (topic == 'albums.read') {
+          const albums = await Album.findAll();
+          console.log('Albums read', albums.length);
+          return globalWs?.send(JSON.stringify({ type: 'albums', data: albums }));
         }
       }
       console.log({
@@ -342,7 +322,7 @@ app.listen(port, async () => {
 
 let globalWs: WebSocket | null = null;
 
-app.ws('/', async (ws, req) => {
+app.ws('/', async (ws) => {
   globalWs = ws;
   console.log('⚡️[ws]: Client connected');
 });
